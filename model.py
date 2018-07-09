@@ -96,30 +96,26 @@ class RGCNN_Seg(nn.Module):
         # Keep the useful Laplacians only. May be zero.
         self.vertice = vertice
         # Print information about NN architecture.
-        # Ngconv = len(F)
-        # Nfc = len(M)
-        # print('NN architecture')
-        # print('  input: M_0 = {}'.format(vertice))
-        # for i in range(Ngconv):
-        #     print('  layer {0}: gconv{0}'.format(i + 1))
-        #     print('    representation: M_{0} * F_{1}= {2} * {3} = {4}'.format(
-        #         i, i + 1, vertice, F[i], vertice * F[i]))
-        #     F_last = F[i - 1] if i > 0 else 1
-        #     print('    weights: F_{0} * F_{1} * K_{1} = {2} * {3} * {4} = {5}'.format(
-        #         i, i + 1, F_last, F[i], K[i], F_last * F[i] * K[i]))
-        #     if brelu == 'b1relu':
-        #         print('    biases: F_{} = {}'.format(i + 1, F[i]))
-        #     elif brelu == 'b2relu':
-        #         print('    biases: M_{0} * F_{0} = {1} * {2} = {3}'.format(
-        #             i + 1, vertice, F[i], vertice * F[i]))
-        # for i in range(Nfc):
-        #     name = 'fc{}'.format(i + 1)
-        #     print('  layer {}: {}'.format(Ngconv + i + 1, name))
-        #     print('    representation: M_{} = {}'.format(Ngconv + i + 1, M[i]))
-        #     M_last = M[i - 1] if i > 0 else M_0 if Ngconv == 0 else vertice * F[-1]
-        #     print('    weights: M_{} * M_{} = {} * {} = {}'.format(
-        #         Ngconv + i, Ngconv + i + 1, M_last, M[i], M_last * M[i]))
-        #     print('    biases: M_{} = {}'.format(Ngconv + i + 1, M[i]))
+        Ngconv = len(F)
+        Nfc = len(M)
+        print('NN architecture')
+        print('  input: M_0 = {}'.format(vertice))
+        for i in range(Ngconv):
+            print('  layer {0}: gconv{0}'.format(i + 1))
+            print('    representation: M_{0} * F_{1}= {2} * {3} = {4}'.format(
+                i, i + 1, vertice, F[i], vertice * F[i]))
+            F_last = F[i - 1] if i > 0 else 1
+            print('    weights: F_{0} * F_{1} * K_{1} = {2} * {3} * {4} = {5}'.format(
+                i, i + 1, F_last, F[i], K[i], F_last * F[i] * K[i]))
+            print('    biases: F_{} = {}'.format(i + 1, F[i]))
+        for i in range(Nfc):
+            name = 'fc{}'.format(i + 1)
+            print('  layer {}: {}'.format(Ngconv + i + 1, name))
+            print('    representation: M_{} = {}'.format(Ngconv + i + 1, M[i]))
+            M_last = M[i - 1] if i > 0 else vertice if Ngconv == 0 else vertice * F[-1]
+            print('    weights: M_{} * M_{} = {} * {} = {}'.format(
+                Ngconv + i, Ngconv + i + 1, M_last, M[i], M_last * M[i]))
+            print('    biases: M_{} = {}'.format(Ngconv + i + 1, M[i]))
 
         # Operations
         self.getGraph = GetGraph()
@@ -129,6 +125,7 @@ class RGCNN_Seg(nn.Module):
         self.regularization, self.dropout = regularization, dropout
         self.batch_size, self.eval_frequency = batch_size, eval_frequency
         self.dir_name = dir_name
+        self.regularizer = []
         for i in range(len(F)):
             if i == 0:
                 layer = GetFilter(Fin=6, K=K[i], Fout=F[i])
@@ -146,6 +143,7 @@ class RGCNN_Seg(nn.Module):
         #         x = torch.cat((x,cat),dim=2)
         for i in range(len(self.F)):
             x = getattr(self, 'gcn%d' % i)(x, L)
+            self.regularizer.append(x)
         return x
 
 class RGCNN_Cls(nn.Module):
@@ -190,6 +188,7 @@ class RGCNN_Cls(nn.Module):
         self.dir_name = dir_name
         self.pool = nn.MaxPool1d(vertice)
         self.relu = nn.ReLU()
+        self.rloss = nn.MSELoss()
         for i in range(len(F)):
             if i == 0:
                 layer = GetFilter(Fin=6, K=K[i], Fout=F[i])
@@ -204,6 +203,7 @@ class RGCNN_Cls(nn.Module):
             setattr(self, 'fc%d' % i, layer)
 
     def forward(self, x, cat):
+        losses = []
         L = self.getGraph(x)
         L = self.getLaplacian(L)
         #         cat = torch.unsqueeze(cat,1)
@@ -213,10 +213,11 @@ class RGCNN_Cls(nn.Module):
         #         x = torch.cat((x,cat),dim=2)
         for i in range(len(self.F)):
             x = getattr(self, 'gcn%d' % i)(x, L)
+            losses.append(self.rloss(x.detach(),torch.zeros_like(x)))
         x = x.permute(0, 2, 1)
         x = self.pool(x)
         x.squeeze_(2)
         for i in range(len(self.M)):
             x = getattr(self, 'fc%d' % i)(x)
             # x = self.relu(x)
-        return x
+        return x,losses

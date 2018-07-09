@@ -20,13 +20,6 @@ def genData(cls,limit=None):
     data = data[:limit]
     label = label[:limit]
 
-    # train_data = np.load("/home/tegs/RGCNN/data_train.npy")
-    # train_label = np.load("/home/tegs/RGCNN/label_train.npy")
-    # val_data = np.load("/home/tegs/RGCNN/data_val.npy")
-    # val_label = np.load("/home/tegs/RGCNN/label_val.npy")
-    # test_data = np.load("/home/tegs/RGCNN/data_test.npy")
-    # test_label = np.load("/home/tegs/RGCNN/label_test.npy")
-
     seg = {}
     name = {}
     i = 0
@@ -50,6 +43,11 @@ def runEpoch(data,label,cat,model,dev,lr,is_training=True):
     criterion = nn.CrossEntropyLoss()
     loss = 0
     res = []
+
+    L2Loss = nn.MSELoss()
+    rloss = 0
+    for out in model.regularizer:
+        rloss += L2Loss(out, torch.zeros_like(out))
     with torch.cuda.device(dev):
         for i in range(steps):
             if len(indices) < batch_size:
@@ -60,15 +58,15 @@ def runEpoch(data,label,cat,model,dev,lr,is_training=True):
             #     train_batch = torch.tensor(train_data[1:3]).cuda()
             #     cat_batch = torch.tensor(cat_train[1:3],dtype=torch.long).cuda()
             #     label_batch = torch.tensor(train_label[1:3],dtype=torch.long).cuda()
-            outputs = model(batch_data, batch_cat)#.permute(0, 2, 1)
-            print(outputs)
-            print(outputs.size())
+            outputs = model(batch_data, batch_cat).permute(0, 2, 1)
             optimizer.zero_grad()
             loss = criterion(outputs, batch_labels)
+            loss += rloss
+            # rloss.backward(retain_graph=True)
             if is_training:
                 loss.backward()
                 optimizer.step()
-                print(loss.item())
+                print(str(loss.item()) + " " + str(rloss.item()))
     return loss
 
 def predict(data,cat,label,model,dev):
@@ -77,12 +75,11 @@ def predict(data,cat,label,model,dev):
     res = np.zeros_like(label)
     with torch.cuda.device(dev):
         for i in range(0,size,model.batch_size):
-            batch_data, batch_cat, batch_label = torch.zeros(batch_size,data.shape[1],data.shape[2]).cuda(),torch.zeros(batch_size,cat.shape[1],dtype=torch.long).cuda(),torch.zeros(batch_size,cat.shape[1],dtype=torch.long).cuda()
-            batch_data[min(i,i+batch_size)] = data[i:min(i+batch_size,size)]
-            batch_cat[min(i,i+batch_size)] = cat[i:min(i+batch_size,size)]
-            batch_label[min(i,i+batch_size)] = label[i:min(i+batch_size,size)]
-            # batch_data, batch_cat, batch_labels = torch.tensor(data[i:i+batch_size,:]).cuda(), torch.tensor(
-            #     cat[i:min(i+batch_size,], dtype=torch.long).cuda(), torch.tensor(label[i:min(i+batch_size,size)], dtype=torch.long).cuda()
+            # batch_data, batch_cat, batch_label = torch.zeros(batch_size,data.shape[1],data.shape[2]).cuda(),torch.zeros(batch_size,cat.shape[1],dtype=torch.long).cuda(),torch.zeros(batch_size,cat.shape[1],dtype=torch.long).cuda()
+            # batch_data[min(i,i+batch_size)] = data[i:min(i+batch_size,size)]
+            # batch_cat[min(i,i+batch_size)] = cat[i:min(i+batch_size,size)]
+            # batch_label[min(i,i+batch_size)] = label[i:min(i+batch_size,size)]
+            batch_data, batch_cat, batch_labels = torch.tensor(data[i:min(i+batch_size,size),:]).cuda(), torch.tensor(cat[i:min(i+batch_size,size)], dtype=torch.long).cuda(), torch.tensor(label[i:min(i+batch_size,size)], dtype=torch.long).cuda()
             outputs = model(batch_data, batch_cat)
             res[i:min(i+batch_size,size)] = outputs.numpy()
     return res
@@ -99,6 +96,8 @@ def evaluate(data,cat,labels,model,dev):
             label_to_cat[label] = key
 
     predictions = predict(data,cat,labels,model,dev)
+    predictions = torch.argmax(predictions,dim=2)
+    print(predictions.size())
     ncorrects = np.mean(predictions == labels, axis=1)
     print(ncorrects)
     accuracy = np.mean(ncorrects)
@@ -145,12 +144,16 @@ def train():
     params['batch_size'] = 30
     num_epochs = 20
 
-    model = RGCNN_Cls(**params).cuda(dev)
+    model = RGCNN_Seg(**params).cuda(dev)
+
+    if os.path.isfile('params.ckl'):
+        model.load_state_dict(torch.load('params.ckl'))
     for epoch in range(num_epochs):
         loss = runEpoch(train_data,train_label,train_cat,model,dev,1e-4)
 
         print("Train loss of Epoch %d: %f" % (epoch,loss))
         loss = evaluate(val_data,val_label,val_cat,model,3)
+        torch.save(model.state_dict(),'params.ckl')
         print("Valid loss: %f" % loss)
 
 if __name__=='__main__':
